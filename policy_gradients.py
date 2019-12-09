@@ -1,7 +1,10 @@
+import time
+
 import gym
 import numpy as np
 import tensorflow as tf
 import collections
+from ModifiedTensorBoard import ModifiedTensorBoard
 
 
 env = gym.make('CartPole-v1')
@@ -14,6 +17,7 @@ class PolicyNetwork:
         self.state_size = state_size
         self.action_size = action_size
         self.learning_rate = learning_rate
+        self.tensorboard = ModifiedTensorBoard(log_dir="logs/{}-{}".format(name, int(time.time())))
 
         with tf.variable_scope(name):
 
@@ -38,7 +42,33 @@ class PolicyNetwork:
             self.optimizer = tf.train.AdamOptimizer(learning_rate=self.learning_rate).minimize(self.loss)
 
 
-# Define hyperparameters
+class ValueNetwork:
+    def __init__(self, state_size, learning_rate, name='value_network'):
+        self.state_size = state_size
+        self.learning_rate = learning_rate
+
+        with tf.variable_scope(name):
+
+            self.state = tf.placeholder(tf.float32, [None, self.state_size], name="state")
+            self.R_t = tf.placeholder(tf.float32, name="total_rewards")
+
+            self.W1 = tf.get_variable("W1", [self.state_size, 12], initializer=tf.contrib.layers.xavier_initializer(seed=0))
+            self.b1 = tf.get_variable("b1", [12], initializer=tf.zeros_initializer())
+            self.W2 = tf.get_variable("W2", [12, 1], initializer=tf.contrib.layers.xavier_initializer(seed=0))
+            self.b2 = tf.get_variable("b2", [1], initializer=tf.zeros_initializer())
+
+            self.Z1 = tf.add(tf.matmul(self.state, self.W1), self.b1)
+            self.A1 = tf.nn.relu(self.Z1)
+            self.output = tf.add(tf.matmul(self.A1, self.W2), self.b2)
+
+            # Softmax probability distribution over actions
+            self.value = tf.squeeze(tf.nn.relu(self.output))
+            # Loss with negative log probability
+            self.loss = tf.reduce_mean(self.output * self.R_t)
+            self.optimizer = tf.train.AdamOptimizer(learning_rate=self.learning_rate).minimize(self.loss)
+
+
+# Define hyper parameters
 state_size = 4
 action_size = env.action_space.n
 
@@ -50,8 +80,10 @@ learning_rate = 0.0004
 render = False
 
 # Initialize the policy network
+baseline = True
 tf.reset_default_graph()
 policy = PolicyNetwork(state_size, action_size, learning_rate)
+value = ValueNetwork(state_size, learning_rate)
 
 
 # Start training the agent with REINFORCE algorithm
@@ -63,6 +95,7 @@ with tf.Session() as sess:
     average_rewards = 0.0
 
     for episode in range(max_episodes):
+        policy.tensorboard.step = episode
         state = env.reset()
         state = state.reshape([1, state_size])
         episode_transitions = []
@@ -84,9 +117,12 @@ with tf.Session() as sess:
             if done:
                 if episode > 98:
                     # Check if solved
-                    average_rewards = np.mean(episode_rewards[(episode - 99):episode+1])
+                    average_rewards = np.mean(episode_rewards[(episode - 99):episode + 1])
+                else:
+                    average_rewards = np.mean(episode_rewards[:episode+1])
+                policy.tensorboard.update_stats(last_100_average_reward=average_rewards, reward=episode_rewards[episode])
                 print("Episode {} Reward: {} Average over 100 episodes: {}".format(episode, episode_rewards[episode], round(average_rewards, 2)))
-                if average_rewards > 475:
+                if episode > 98 and average_rewards > 475:
                     print(' Solved at episode: ' + str(episode))
                     solved = True
                 break
@@ -98,5 +134,10 @@ with tf.Session() as sess:
         # Compute Rt for each time-step t and update the network's weights
         for t, transition in enumerate(episode_transitions):
             total_discounted_return = sum(discount_factor ** i * t.reward for i, t in enumerate(episode_transitions[t:])) # Rt
+            if baseline:
+                total_discounted_return -= sess.run(value.value, {value.state: transition.state})
+                value_dict = {value.state: transition.state, value.R_t: total_discounted_return}
+                _, value_loss = sess.run([value.optimizer, value.loss], value_dict)
             feed_dict = {policy.state: transition.state, policy.R_t: total_discounted_return, policy.action: transition.action}
             _, loss = sess.run([policy.optimizer, policy.loss], feed_dict)
+            policy.tensorboard.update_stats(loss=loss)
