@@ -10,10 +10,14 @@ from ModifiedTensorBoard import ModifiedTensorBoard
 env = gym.make('CartPole-v1')
 
 np.random.seed(1)
+actor_critic = True
+baseline = True
+start_time = time.time()
+rewards_num = 0
 
 
 class PolicyNetwork:
-    def __init__(self, state_size, action_size, learning_rate, name='policy_network'):
+    def __init__(self, state_size, action_size, learning_rate, name='policy_network_baseline_' + str(baseline)):
         self.state_size = state_size
         self.action_size = action_size
         self.learning_rate = learning_rate
@@ -64,7 +68,8 @@ class ValueNetwork:
             # Softmax probability distribution over actions
             self.value = tf.squeeze(tf.nn.relu(self.output))
             # Loss with negative log probability
-            self.loss = tf.reduce_mean(self.output * self.R_t)
+            self.relu_output = tf.nn.relu(self.output)
+            self.loss = tf.reduce_mean(self.relu_output * self.R_t)
             self.optimizer = tf.train.AdamOptimizer(learning_rate=self.learning_rate).minimize(self.loss)
 
 
@@ -80,7 +85,6 @@ learning_rate = 0.0004
 render = False
 
 # Initialize the policy network
-baseline = True
 tf.reset_default_graph()
 policy = PolicyNetwork(state_size, action_size, learning_rate)
 value = ValueNetwork(state_size, learning_rate)
@@ -114,6 +118,23 @@ with tf.Session() as sess:
             episode_transitions.append(Transition(state=state, action=action_one_hot, reward=reward, next_state=next_state, done=done))
             episode_rewards[episode] += reward
 
+            # update the weights of the two networks if we are using actor critic
+            '''
+            if actor_critic:
+                if done:
+                    next_state_value = 0
+                else:
+                    next_state_value = sess.run(value.value, {value.state: next_state})
+
+                delta = reward + discount_factor * next_state_value - sess.run(value.value, {value.state: state})
+                #I = step + 1
+                #delta *= I
+                value_dict = {value.state: state, value.R_t: delta}
+                _, value_loss = sess.run([value.optimizer, value.loss], value_dict)
+                feed_dict = {policy.state: state, policy.R_t: delta, policy.action: action_one_hot}
+                _, loss = sess.run([policy.optimizer, policy.loss], feed_dict)
+                policy.tensorboard.update_stats(loss=loss)
+            '''
             if done:
                 if episode > 98:
                     # Check if solved
@@ -122,22 +143,44 @@ with tf.Session() as sess:
                     average_rewards = np.mean(episode_rewards[:episode+1])
                 policy.tensorboard.update_stats(last_100_average_reward=average_rewards, reward=episode_rewards[episode])
                 print("Episode {} Reward: {} Average over 100 episodes: {}".format(episode, episode_rewards[episode], round(average_rewards, 2)))
+                rewards_num += episode_rewards[episode]
                 if episode > 98 and average_rewards > 475:
                     print(' Solved at episode: ' + str(episode))
                     solved = True
                 break
+
             state = next_state
 
         if solved:
             break
 
+
         # Compute Rt for each time-step t and update the network's weights
         for t, transition in enumerate(episode_transitions):
-            total_discounted_return = sum(discount_factor ** i * t.reward for i, t in enumerate(episode_transitions[t:])) # Rt
-            if baseline:
-                total_discounted_return -= sess.run(value.value, {value.state: transition.state})
-                value_dict = {value.state: transition.state, value.R_t: total_discounted_return}
+            if actor_critic:
+                if transition.done:
+                    next_state_value = 0
+                else:
+                    next_state_value = sess.run(value.value, {value.state: transition.next_state})
+
+                delta = transition.reward + discount_factor * next_state_value - sess.run(value.value, {value.state: transition.state})
+                I = step + 1
+                delta *= I
+                value_dict = {value.state: transition.state, value.R_t: delta}
                 _, value_loss = sess.run([value.optimizer, value.loss], value_dict)
-            feed_dict = {policy.state: transition.state, policy.R_t: total_discounted_return, policy.action: transition.action}
-            _, loss = sess.run([policy.optimizer, policy.loss], feed_dict)
-            policy.tensorboard.update_stats(loss=loss)
+                feed_dict = {policy.state: transition.state, policy.R_t: delta, policy.action: transition.action}
+                _, loss = sess.run([policy.optimizer, policy.loss], feed_dict)
+                policy.tensorboard.update_stats(loss=loss)
+            else:
+                total_discounted_return = sum(discount_factor ** i * t.reward for i, t in enumerate(episode_transitions[t:])) # Rt
+                if baseline:
+                    total_discounted_return -= sess.run(value.value, {value.state: transition.state})
+                    value_dict = {value.state: transition.state, value.R_t: total_discounted_return}
+                    _, value_loss = sess.run([value.optimizer, value.loss], value_dict)
+                feed_dict = {policy.state: transition.state, policy.R_t: total_discounted_return, policy.action: transition.action}
+                _, loss = sess.run([policy.optimizer, policy.loss], feed_dict)
+                policy.tensorboard.update_stats(loss=loss)
+
+print()
+total_time = time.time()-start_time
+policy.tensorboard.update_stats(Overall_time=total_time, Time_per_reward=total_time/rewards_num, Time_per_episode=total_time/episode)
