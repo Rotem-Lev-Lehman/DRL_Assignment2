@@ -1,19 +1,17 @@
 import time
-
 import gym
 import numpy as np
 import tensorflow as tf
 import collections
 from ModifiedTensorBoard import ModifiedTensorBoard
 
-
 env = gym.make('CartPole-v1')
-
 np.random.seed(1)
 actor_critic = True
 baseline = True
 start_time = time.time()
 rewards_num = 0
+satisfying_average = 475
 
 
 class PolicyNetwork:
@@ -119,22 +117,20 @@ with tf.Session() as sess:
             episode_rewards[episode] += reward
 
             # update the weights of the two networks if we are using actor critic
-            '''
             if actor_critic:
                 if done:
                     next_state_value = 0
                 else:
                     next_state_value = sess.run(value.value, {value.state: next_state})
-
-                delta = reward + discount_factor * next_state_value - sess.run(value.value, {value.state: state})
+                target_for_value = reward + discount_factor * next_state_value
+                delta = target_for_value - sess.run(value.value, {value.state: state})
                 #I = step + 1
                 #delta *= I
-                value_dict = {value.state: state, value.R_t: delta}
+                value_dict = {value.state: state, value.R_t: target_for_value}
                 _, value_loss = sess.run([value.optimizer, value.loss], value_dict)
                 feed_dict = {policy.state: state, policy.R_t: delta, policy.action: action_one_hot}
                 _, loss = sess.run([policy.optimizer, policy.loss], feed_dict)
                 policy.tensorboard.update_stats(loss=loss)
-            '''
             if done:
                 if episode > 98:
                     # Check if solved
@@ -144,7 +140,7 @@ with tf.Session() as sess:
                 policy.tensorboard.update_stats(last_100_average_reward=average_rewards, reward=episode_rewards[episode])
                 print("Episode {} Reward: {} Average over 100 episodes: {}".format(episode, episode_rewards[episode], round(average_rewards, 2)))
                 rewards_num += episode_rewards[episode]
-                if episode > 98 and average_rewards > 475:
+                if episode > 98 and average_rewards > satisfying_average:
                     print(' Solved at episode: ' + str(episode))
                     solved = True
                 break
@@ -154,24 +150,9 @@ with tf.Session() as sess:
         if solved:
             break
 
-
         # Compute Rt for each time-step t and update the network's weights
-        for t, transition in enumerate(episode_transitions):
-            if actor_critic:
-                if transition.done:
-                    next_state_value = 0
-                else:
-                    next_state_value = sess.run(value.value, {value.state: transition.next_state})
-
-                delta = transition.reward + discount_factor * next_state_value - sess.run(value.value, {value.state: transition.state})
-                I = step + 1
-                delta *= I
-                value_dict = {value.state: transition.state, value.R_t: delta}
-                _, value_loss = sess.run([value.optimizer, value.loss], value_dict)
-                feed_dict = {policy.state: transition.state, policy.R_t: delta, policy.action: transition.action}
-                _, loss = sess.run([policy.optimizer, policy.loss], feed_dict)
-                policy.tensorboard.update_stats(loss=loss)
-            else:
+        if not actor_critic:
+            for t, transition in enumerate(episode_transitions):
                 total_discounted_return = sum(discount_factor ** i * t.reward for i, t in enumerate(episode_transitions[t:])) # Rt
                 if baseline:
                     total_discounted_return -= sess.run(value.value, {value.state: transition.state})
