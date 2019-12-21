@@ -73,6 +73,12 @@ class ValueNetwork:
             self.loss = tf.reduce_mean(tf.square(self.R_t - self.value))  # loss = mse
             self.optimizer = tf.train.AdamOptimizer(learning_rate=self.learning_rate).minimize(self.loss)
 
+    def set_weights(self, other):
+        self.W1 = other.W1
+        self.b1 = other.b1
+        self.W2 = other.W2
+        self.b2 = other.b2
+
 
 # Define hyper parameters
 state_size = 4
@@ -119,23 +125,6 @@ with tf.Session() as sess:
             episode_transitions.append(Transition(state=state, action=action_one_hot, reward=reward, next_state=next_state, done=done))
             episode_rewards[episode] += reward
 
-            '''
-            # update the weights of the two networks if we are using actor critic
-            if actor_critic:
-                if done:
-                    next_state_value = 0
-                else:
-                    next_state_value = sess.run(value.value, {value.state: next_state})
-                target_for_value = reward + discount_factor * next_state_value
-                delta = target_for_value - sess.run(value.value, {value.state: state})
-                #I = step + 1
-                #delta *= I
-                value_dict = {value.state: state, value.R_t: delta}
-                _, value_loss = sess.run([value.optimizer, value.loss], value_dict)
-                feed_dict = {policy.state: state, policy.R_t: delta, policy.action: action_one_hot}
-                _, loss = sess.run([policy.optimizer, policy.loss], feed_dict)
-                policy.tensorboard.update_stats(loss=loss)
-            '''
             if done:
                 if episode > 98:
                     # Check if solved
