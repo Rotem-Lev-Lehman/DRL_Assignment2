@@ -153,11 +153,8 @@ with tf.Session() as sess:
                     next_state_value = 0
                 else:
                     next_state_value = sess.run(value.value, {value.state: transition.next_state})
-                # target_for_value = transition.reward + discount_factor * next_state_value
                 target_for_value = total_discounted_return
                 delta = target_for_value - sess.run(value.value, {value.state: transition.state})
-                # I = step + 1
-                # delta *= I
                 value_dict = {value.state: transition.state, value.R_t: delta}
                 _, value_loss = sess.run([value.optimizer, value.loss], value_dict)
                 feed_dict = {policy.state: transition.state, policy.R_t: delta, policy.action: transition.action}
